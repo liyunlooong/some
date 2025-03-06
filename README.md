@@ -33,6 +33,23 @@ More details can be found in our [paper](https://arxiv.org/abs/2410.01804) or at
 
 ## Quick Install
 
+If you wish to skip the install, use this command to train:
+
+```
+git clone --recursive https://github.com/half-potato/ever_training
+bash docker_train.sh <path to dataset> <path to output>
+```
+And to visualize, do:
+```
+bash docker_visualize.py <path to output> <path to dataset> 6006 127.0.0.1
+```
+and in a different terminal:
+```
+cd SIBR_viewers
+./install/bin/SIBR_remoteGaussian_app --ip 127.0.0.1 --port 6009
+```
+
+
 ### Dependencies
 - OptiX 7.4, which must be downloaded from NVIDIA's [website](https://developer.nvidia.com/designworks/optix/downloads/legacy). This is downloaded and placed somewhere on your computer, then use `export OptiX_INSTALL_DIR=...` to set the variable to that location.
 - [*SlangD*](https://github.com/shader-slang/slang). We recommend using the latest version you can, as they have fixed quite a few bugs. 
@@ -62,6 +79,7 @@ Now, download the files and run `bash install.bash`
 ```
 git clone --recursive https://github.com/half-potato/ever_training
 cd ever_training
+pip install -r requirements.txt
 bash install.bash
 ```
 If you get a bunch of compilation errors, it could be that you need to run the export line for the CXX and CC versions.
