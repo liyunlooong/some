@@ -15,8 +15,8 @@ fi
 
 TRAINED_MODEL_LOCATION="$1"
 SCENE_LOCATION="$2"
-PORT="$3"
-IP="$4"
+PORT="${3:-6009}"
+IP="${4:-127.0.0.1}"
 shift 4
 
 docker run --rm --gpus all -it \

@@ -14,7 +14,9 @@ fi
 
 DATASET_DIR="$1"
 OUTPUT_DIR="$2"
-shift 2
+PORT="${3:-6009}"
+IP="${4:-127.0.0.1}"
+shift 4
 
 docker run --rm --gpus all \
   -v /tmp/NVIDIA:/tmp/NVIDIA \
@@ -22,6 +24,7 @@ docker run --rm --gpus all \
   -v "$DATASET_DIR":/data/dataset \
   -v "$OUTPUT_DIR":/data/output \
   -v "$(pwd)":/ever_training2 \
+  -p "$IP:$PORT:$PORT" \
   halfpotato/ever:latest \
   bash -c 'source activate ever && cd /ever_training2 && rm -r ever && cp -r /ever_training/ever . && python train.py -s /data/dataset -m /data/output "$@"' _ "$@"
 

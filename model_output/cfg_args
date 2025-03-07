@@ -1,0 +1,1 @@
+Namespace(sh_degree=3, source_path='/data/dataset', model_path='/data/output', images='images_4', resolution=-1, white_background=False, data_device='cpu', render_spline=False, use_neural_network=False, eval=True, num_additional_pts=10000, additional_size_multi=1.0, num_spline_frames=480, glo_latent_dim=64, max_opacity=0.99, tmin=0.2)
