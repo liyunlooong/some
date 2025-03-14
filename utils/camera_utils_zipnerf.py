@@ -21,6 +21,7 @@ import types
 from typing import Final, List, Mapping, Optional, Text, Tuple, TypeAlias
 
 import numpy as np
+from absl import logging
 # import chex
 # from internal import configs
 # from internal import geometry
@@ -585,6 +586,10 @@ def identify_file_indices(
   # being missing.
   if not set(subset_names).issubset(file_names):
     subset_names_missing_from_file_names = set(subset_names) - set(file_names)
+    logging.warning(
+        'Some files from subset are missing in the file names:\n%s',
+        ' '.join(str(x) for x in subset_names_missing_from_file_names),
+    )
     missing_subset_names_threshold = len(
         subset_names_missing_from_file_names
     ) / len(subset_names)

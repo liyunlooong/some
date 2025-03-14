@@ -95,6 +95,7 @@ def convert_to_float(frac_str):
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, metadata_path):
     if os.path.isfile(metadata_path):
         with open(metadata_path, "r") as f:
+            print("Loading metadata")
             metadata = json.load(f)
     else:
         metadata = None

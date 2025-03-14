@@ -110,7 +110,7 @@ class OptimizationParams(ParamGroup):
         self.position_lr_max_steps = 30_000
         self.position_lr_init = 4e-5 #0.00004
 
-        self.glo_lr = 0.01
+        self.glo_lr = 0.00
         self.glo_network_lr = 0.00005
 
         self.feature_lr = 0.0025

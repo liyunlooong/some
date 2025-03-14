@@ -40,21 +40,22 @@ def main():
     docker_cmd = [
         "docker", "run", "--rm", "--gpus", "all",
         "-v", "/tmp/NVIDIA:/tmp/NVIDIA",
+        # "--user", "$(id -u):$(id -g)",
         "-e", "NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility",
         # Mount the scene/dataset directory and model_path
         "-v", f"{known_args.scene}:/data/dataset",
         "-v", f"{known_args.model_path}:/data/output",
         # Also mount the current directory for your code
-        "-v", f"{os.getcwd()}:/ever_training2",
+        #"-v", f"{os.getcwd()}:/ever_training2",
         # Port mapping
         "-p", f"{known_args.ip}:{known_args.port}:{known_args.port}",
         "halfpotato/ever:latest",
         "bash", "-c",
         (
             "source activate ever && "
-            "cd /ever_training2 && "
-            "rm -r ever && "
-            "cp -r /ever_training/ever . && "
+            # "cd /ever_training2 && "
+            # "rm -r ever && "
+            # "cp -r /ever_training/ever . && "
             # "$@" references extra arguments from the final "_" placeholder
             "python train.py -s /data/dataset -m /data/output \"$@\""
         ),
@@ -63,6 +64,7 @@ def main():
 
     # Append the unknown_args so train.py sees them
     docker_cmd += unknown_args
+    print(docker_cmd)
 
     print("Running:", " ".join(docker_cmd))  # For debugging
     subprocess.run(docker_cmd, check=True)

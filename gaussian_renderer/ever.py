@@ -16,7 +16,6 @@
 import torch
 import math
 
-from utils import camera_utils_zipnerf
 from scene.gaussian_model import GaussianModel
 from ever.splinetracers.fast_ellipsoid_splinetracer import trace_rays
 # from splinetracer.splinetracers.ellipsoid_splinetracer import trace_rays
@@ -27,7 +26,6 @@ from kornia import create_meshgrid
 import numpy as np
 from icecream import ic
 from scene.dataset_readers import ProjectionType
-from utils import camera_utils_zipnerf
 
 def get_ray_directions(H, W, focal, center=None, random=True):
     """

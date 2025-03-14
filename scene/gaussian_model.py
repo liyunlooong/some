@@ -112,7 +112,7 @@ class GaussianModel:
             symm = strip_symmetric(actual_covariance)
             return symm
         
-        self.max_prim_size = 25.0
+        self.max_prim_size = 2500.0
         self.min_prim_size = SCALING2RADIUS*1e-4
 
         self.max_opacity = max_opacity
@@ -330,7 +330,7 @@ class GaussianModel:
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_rest_lr, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-            {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
+            {'params': [self._scaling], 'lr': training_args.scaling_lr * np.log(self.spatial_lr_scale), "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': self.glo_network.parameters(), 'lr': training_args.glo_network_lr, "name": "glo_network"},
         ]
@@ -583,9 +583,9 @@ class GaussianModel:
         opacity_mask = (self.get_opacity > min_opacity).reshape(-1)
         selected_pts_mask = selected_pts_mask & size_mask & opacity_mask
 
-        #print(
-        #    f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Grad mean: {padded_grad.mean()}"
-        #)
+        print(
+           f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Grad mean: {padded_grad.mean()}"
+        )
 
         # print(
         #         f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Gradient: {grads.mean()}"
