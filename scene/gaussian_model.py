@@ -112,7 +112,7 @@ class GaussianModel:
             symm = strip_symmetric(actual_covariance)
             return symm
         
-        self.max_prim_size = 25.0
+        self.max_prim_size = 2500.0
         self.min_prim_size = SCALING2RADIUS*1e-4
 
         self.max_opacity = max_opacity
@@ -324,13 +324,14 @@ class GaussianModel:
         self.feat_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.death_mark = torch.zeros((self.get_xyz.shape[0]), dtype=int, device="cuda")
+        ic(self.spatial_lr_scale)
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_rest_lr, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-            {'params': [self._scaling], 'lr': training_args.scaling_lr * self.spatial_lr_scale, "name": "scaling"},
+            {'params': [self._scaling], 'lr': training_args.scaling_lr * np.log(self.spatial_lr_scale), "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': self.glo_network.parameters(), 'lr': training_args.glo_network_lr, "name": "glo_network"},
         ]
