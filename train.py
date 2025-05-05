@@ -231,7 +231,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter:
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and iteration % opt.opacity_reset_interval > opt.densification_interval:
-                    gaussians.densify_and_prune(densify_grad_threshold * scene.cameras_extent, opt.min_opacity, scene.cameras_extent, 1000, clone_grad_threshold * scene.cameras_extent, opt.min_split_opacity)
+                    gaussians.densify_and_prune(densify_grad_threshold, opt.min_opacity, scene.cameras_extent, 1000, clone_grad_threshold * scene.cameras_extent, opt.min_split_opacity)
                     torch.cuda.empty_cache()
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
