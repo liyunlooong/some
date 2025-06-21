@@ -82,6 +82,9 @@ class ModelParams(ParamGroup):
         self.glo_latent_dim = 64
         self.max_opacity = 0.99
         self.tmin = 0.2
+        self.enable_mip_splatting = False  # Add the missing attribute
+        self.low_pass_2d_kernel_size = 3 # Add the missing attribute
+        self.low_pass_3d_kernel_size = 3 # Add the missing attribute
 
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -110,7 +113,7 @@ class OptimizationParams(ParamGroup):
         self.position_lr_max_steps = 30_000
         self.position_lr_init = 4e-5 #0.00004
 
-        self.glo_lr = 0.00
+        self.glo_lr = 0.01
         self.glo_network_lr = 0.00005
 
         self.feature_lr = 0.0025
@@ -123,6 +126,8 @@ class OptimizationParams(ParamGroup):
         self.min_split_opacity = 0.01
         self.percent_dense = 0.0025
         self.lambda_dssim = 0.2
+        self.max_lambda_dssim = 0.8  # Add the missing attribute
+        self.max_dssim_iteration = 15000  # Add the missing attribute
 
         self.lambda_anisotropic = 1e-1
         self.lambda_distortion = 0
@@ -141,6 +146,16 @@ class OptimizationParams(ParamGroup):
         self.fallback_xy_grad = False
 
         self.random_background = False
+        
+        # Bilateral grid parameters
+        self.use_bilateral_grid = False
+        self.bilateral_grid_shape = [16, 16, 8]
+        self.bilateral_grid_lr = 0.003  # Match gsplat's default
+        
+        # Default to 10.0 (gsplat's value) but keep it configurable
+        # Explicitly set as float to ensure command line arguments work with decimal values
+        self.lambda_tv: float = 10.0
+        
         super().__init__(parser, "Optimization Parameters")
 
 

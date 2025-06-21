@@ -112,7 +112,7 @@ class GaussianModel:
             symm = strip_symmetric(actual_covariance)
             return symm
         
-        self.max_prim_size = 2500.0
+        self.max_prim_size = 250.0
         self.min_prim_size = SCALING2RADIUS*1e-4
 
         self.max_opacity = max_opacity
@@ -584,9 +584,9 @@ class GaussianModel:
         opacity_mask = (self.get_opacity > min_opacity).reshape(-1)
         selected_pts_mask = selected_pts_mask & size_mask & opacity_mask
 
-        #print(
-        #    f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Grad mean: {padded_grad.mean()}"
-        #)
+        print(
+           f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Grad mean: {padded_grad.mean()}"
+        )
 
         # print(
         #         f"Explored {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()} Gradient: {grads.mean()}"
@@ -635,9 +635,9 @@ class GaussianModel:
 
         new_opacity = self.inverse_opacity_activation(divided_opacities)
 
-        # print(
-        #     f"Cloned {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()}. Max gradient: {grads.max()}"
-        # )
+        print(
+            f"Cloned {selected_pts_mask.sum()}/{selected_pts_mask.shape[0]} primitives. Size mask: {size_mask.sum()}. Max gradient: {grads.max()}"
+        )
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -671,19 +671,19 @@ class GaussianModel:
         xyz_grad = self._xyz.grad
         scaling, density = self.get_scale_and_opacity_for_rendering()
 
-        prune_mask = self.update_death_mark()
-        if prune_mask.sum() > 0:
-            grads = grads[~prune_mask]
-            denom = denom[~prune_mask]
-            scaling = scaling[~prune_mask]
-            density = density[~prune_mask]
+        # prune_mask = self.update_death_mark()
+        # if prune_mask.sum() > 0:
+        #     grads = grads[~prune_mask]
+        #     denom = denom[~prune_mask]
+        #     scaling = scaling[~prune_mask]
+        #     density = density[~prune_mask]
 
         prune_mask = (self.get_minor_axis_opacity < 0.005).reshape(-1)
         n = denom.shape[0]
         prune_mask[:n] = (denom.reshape(-1) > 0) & prune_mask[:n]
         prune_mask[n:] = False
 
-        # print(f"Pruned {prune_mask.sum()} primitives. Mean Prune Opacity: {self.get_opacity[prune_mask].mean()}")
+        print(f"Pruned {prune_mask.sum()} primitives. Mean Prune Opacity: {self.get_opacity[prune_mask].mean()}")
         self.prune_points(prune_mask)
 
         if prune_mask.sum() > 0:
@@ -704,8 +704,8 @@ class GaussianModel:
         
         small_points = self.death_mark > 3
 
-        prune_mask = small_points
-        # print(f"Pruned {prune_mask.sum()} primitives. Death Mark: {self.death_mark.float().mean()}")
+        prune_mask = torch.zeros_like(small_points)
+        print(f"Pruned {prune_mask.sum()} primitives. Death Mark: {self.death_mark.float().mean()}")
         if prune_mask.sum() > 0:
             self.prune_points(prune_mask)
         return prune_mask

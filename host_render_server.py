@@ -36,8 +36,6 @@ import time
 from gaussian_renderer.fast_renderer import FastRenderer
 from gaussian_renderer import render, network_gui
 
-# renderFunc = splinerender
-# renderFunc = render
 from scene.dataset_readers import ProjectionType
 
 def convert_to_float(frac_str):

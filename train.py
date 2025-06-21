@@ -9,6 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import time
 import os
 import torch
 from random import randint
@@ -28,10 +29,16 @@ import random
 import math
 import cv2
 import numpy as np
+import torch.nn.functional as F
+from typing import List
+from torch.optim.lr_scheduler import ExponentialLR, LinearLR, ChainedScheduler
 
 renderFunc = splinerender
 # renderFunc = render
 from scene.dataset_readers import ProjectionType
+
+from scene.cameras import Camera
+from utils.lib_bilagrid import BilateralGrid, total_variation_loss, slice
 
 PREVIEW_RES_FACTOR = 1
 
@@ -63,14 +70,49 @@ def set_glo_vector(viewpoint_cam, gaussians, camera_inds):
          ]
     )
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelineParams, testing_iterations : List[int], saving_iterations : List[int], checkpoint_iterations : List[int], checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree, dataset.use_neural_network, dataset.max_opacity, dataset.tmin)
-    scene = Scene(dataset, gaussians)
-    if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
-        gaussians.restore(model_params, opt)
+    gaussians = GaussianModel(dataset.sh_degree)
+    scene = Scene(dataset, gaussians, load_iteration=checkpoint, shuffle=True)
+    
+    train_cameras = scene.getTrainCameras()
+    camera_inds = {}
+    camera_inds_back = {}
+    for i, camera in enumerate(train_cameras):
+        camera_inds[camera.uid] = i
+        camera_inds_back[i] = camera.uid
+    
+    # ----- Initialize bilateral grid if enabled -----
+    bil_grids = None
+    bil_optimizer = None
+    if opt.use_bilateral_grid:
+        print("\nInitializing Bilateral Grid:")
+        print(f"- Grid shape: {opt.bilateral_grid_shape}")
+        print(f"- Learning rate: {opt.bilateral_grid_lr}")
+        print(f"- TV loss weight: {opt.lambda_tv}")
+        bil_grids = BilateralGrid(
+            len(train_cameras),
+            grid_X=opt.bilateral_grid_shape[0],
+            grid_Y=opt.bilateral_grid_shape[1],
+            grid_W=opt.bilateral_grid_shape[2],
+        ).to("cuda")
+        bil_optimizer = torch.optim.Adam([bil_grids.grids], lr=opt.bilateral_grid_lr, eps=1e-15)
+        
+        # Create a chained scheduler with warmup like in gsplat
+        # First 1000 iterations: linear warmup from 1% to 100% of learning rate
+        # Then exponential decay to 1% of initial learning rate by the end of training
+        bil_warmup = LinearLR(bil_optimizer, start_factor=0.01, total_iters=1000)
+        bil_decay = ExponentialLR(bil_optimizer, gamma=0.01**(1.0/opt.iterations))
+        bil_scheduler = ChainedScheduler([bil_warmup, bil_decay])
+        
+        print(f"- Number of grids: {len(train_cameras)}")
+        print("- Using LinearLR warmup + ExponentialLR decay scheduler")
+        print("Bilateral Grid initialized successfully!\n")
+    # ------------------------------------------------
+    
+    renderFunc = splinerender
+    background = torch.tensor([0.0, 0.0, 0.0], device="cuda")
     # gaussians.load_ply("output/a5911cf7-0/point_cloud/iteration_30000/point_cloud.ply")
     # gaussians.load_ply("/home/amai/Downloads/point_cloud.ply")
     # gaussians.load_ply("/home/amai/3DGS/output/20e2f33c-e/point_cloud/iteration_30000/point_cloud.ply", legacy_compat=True)
@@ -87,14 +129,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("torch.cuda.memory_reserved: %fGB"%(torch.cuda.memory_reserved(0)/1024/1024/1024))
     print("torch.cuda.max_memory_reserved: %fGB"%(torch.cuda.max_memory_reserved(0)/1024/1024/1024))
 
-
     viewpoint_stack = scene.getTrainCameras().copy()
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    camera_inds = {view.uid: i for i, view in enumerate(viewpoint_stack)}
     gaussians.initialize_glo(len(viewpoint_stack), dataset.glo_latent_dim)
-    train_cameras = scene.getTrainCameras()
 
     # opt.densification_interval = len(viewpoint_stack)
 
@@ -102,6 +141,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     densify_grad_threshold = opt.densify_grad_threshold
 
     gaussians.training_setup(opt)
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -154,10 +194,51 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         render_pkg = renderFunc(viewpoint_cam, gaussians, pipe, bg, random=not opt.center_pixel)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        
-        if hasattr(viewpoint_cam, "alpha_mask") and viewpoint_cam.alpha_mask is not None:
-            alpha_mask = viewpoint_cam.alpha_mask.cuda()
-            image *= alpha_mask
+
+       
+        #if hasattr(viewpoint_cam, "alpha_mask") and viewpoint_cam.alpha_mask is not None:
+        #    alpha_mask = viewpoint_cam.alpha_mask.cuda()
+        #    image *= alpha_mask
+
+        if viewpoint_cam.gt_alpha_mask is not None:
+            alpha_mask = viewpoint_cam.gt_alpha_mask.cuda()
+            image *= alpha_mask    
+
+        # ----- Apply bilateral grid transformation if enabled -----
+        if opt.use_bilateral_grid:
+            # torch.cuda.synchronize()
+            # Get camera ID for this viewpoint
+            camera_id = camera_inds[viewpoint_cam.uid]
+            # cv2.imshow('og', image.permute(1, 2, 0).detach().cpu().numpy())
+            
+            # Reshape image for bilateral grid transformation
+            img_for_bil = image.permute(1, 2, 0).reshape(-1, 3)
+            
+            # Create image IDs tensor (all pixels have same image ID)
+            img_ids = torch.full((img_for_bil.shape[0],), camera_id, 
+                                  device="cuda", dtype=torch.long)
+            
+            # Apply bilateral transformation
+            st = time.time()
+            h, w = image.shape[1], image.shape[2]
+            y_coords, x_coords = torch.meshgrid(
+                (torch.arange(h, device="cuda") + 0.5) / h,
+                (torch.arange(w, device="cuda") + 0.5) / w,
+                indexing="ij"
+            )
+            coords = torch.stack([x_coords, y_coords], dim=-1).reshape(-1, 2)
+            transformed = slice(bil_grids, coords, img_for_bil, img_ids)
+            # transformed = slice_for_single_image(bil_grids.grids, coords, img_for_bil, img_ids)
+            # print(transformed.keys(), transformed["rgb"])
+            
+            # Reshape back to original format
+            image = transformed["rgb"].reshape(image.shape[1], image.shape[2], 3).permute(2, 0, 1)
+            # torch.cuda.synchronize()
+            # cv2.imshow('new guy', image.permute(1, 2, 0).detach().cpu().numpy())
+            # cv2.waitKey(1)
+            # print(time.time()-st, image.shape)
+        # --------------------------------------------------------
+
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
@@ -173,6 +254,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss = (1.0 - lambda_dssim) * Ll1 + lambda_dssim * (
             1.0 - ssim(image, gt_image)
         ).clip(min=0, max=1) + opt.lambda_distortion * distortion_loss + opt.lambda_anisotropic * anisotropic_loss 
+        
+        # ----- Add total variation loss for bilateral grid if enabled -----
+        tvloss = None
+        if opt.use_bilateral_grid:
+            # Use the configurable lambda_tv parameter (default is 10.0)
+            tvloss = opt.lambda_tv * total_variation_loss(bil_grids.grids)
+            loss += tvloss
+        # --------------------------------------------------------------
+        
         if torch.isnan(loss).any():
             print("nan")
             continue
@@ -212,13 +302,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f} Num Prim: {gaussians.get_xyz.shape[0]} I: {render_pkg['iters'].float().mean()}"})
+                progress_info = {"Loss": f"{ema_loss_for_log:.{7}f}", "Num Prim": gaussians.get_xyz.shape[0], "I": f"{render_pkg['iters'].float().mean():.1f}"}
+                if opt.use_bilateral_grid and tvloss is not None:
+                    progress_info["BG_TV"] = f"{tvloss.item():.{5}f}"
+                progress_bar.set_postfix(progress_info)
                 progress_bar.update(10)
+                
+            # Debug bilateral grid activity
+            if opt.use_bilateral_grid and iteration % 1000 == 0:
+                current_lr = bil_optimizer.param_groups[0]['lr']
+                grid_mean = bil_grids.grids.abs().mean().item()
+                grid_std = bil_grids.grids.std().item()
+                print(f"[DEBUG] Iter {iteration} - Grid stats: mean={grid_mean:.6f}, std={grid_std:.6f}, LR={current_lr:.6f}")
+                
             if iteration == opt.iterations:
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, renderFunc, (pipe, background), camera_inds)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, renderFunc, (pipe, background), camera_inds, bil_grids, tvloss)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -231,7 +332,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter:
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and iteration % opt.opacity_reset_interval > opt.densification_interval:
-                    gaussians.densify_and_prune(densify_grad_threshold, opt.min_opacity, scene.cameras_extent, 1000, clone_grad_threshold * scene.cameras_extent, opt.min_split_opacity)
+                    gaussians.densify_and_prune(densify_grad_threshold, opt.min_opacity, scene.cameras_extent, 1000, clone_grad_threshold, opt.min_split_opacity)
                     torch.cuda.empty_cache()
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
@@ -254,6 +355,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                
+                # ----- Update bilateral grid if enabled -----
+                if opt.use_bilateral_grid:
+                    # torch.cuda.synchronize()
+                    # st = time.time()
+                    bil_optimizer.step()
+                    bil_optimizer.zero_grad(set_to_none=True)
+                    bil_scheduler.step()
+                    # torch.cuda.synchronize()
+                    # print(time.time()-st)
+                # ------------------------------------------
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -281,11 +393,17 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, camera_inds):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, camera_inds, bilateral_grid=None, tvloss=None):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
+        
+        # Log bilateral grid stats if enabled
+        if bilateral_grid is not None and tvloss is not None:
+            tb_writer.add_scalar('bilateral_grid/tv_loss', tvloss.item(), iteration)
+            # Log histogram of grid values
+            tb_writer.add_histogram('bilateral_grid/values', bilateral_grid.grids, iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -303,6 +421,31 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config['cameras']):
                     set_glo_vector(viewpoint, scene.gaussians, camera_inds)
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, random=False)["render"], 0.0, 1.0)
+                    
+                    # Apply bilateral grid transformation if enabled
+                    if bilateral_grid is not None and config['name'] == 'train':  # Only apply to train views that have matching camera IDs
+                        try:
+                            camera_id = camera_inds[viewpoint.uid]
+                            h, w = image.shape[1], image.shape[2]
+                            
+                            y_coords, x_coords = torch.meshgrid(
+                                torch.linspace(0, 1, h, device="cuda"),
+                                torch.linspace(0, 1, w, device="cuda"),
+                                indexing='ij'
+                            )
+                            coords = torch.stack([x_coords, y_coords], dim=-1).reshape(-1, 2)
+                            
+                            img_for_bil = image.permute(1, 2, 0).reshape(-1, 3)
+                            img_ids = torch.full((img_for_bil.shape[0],), camera_id, device="cuda", dtype=torch.long)
+                            
+                            transformed = slice(bil_grids.grids,
+                                                bil_grids.grid_X, bil_grids.grid_Y, bil_grids.grid_W,
+                                                coords, img_for_bil, img_ids)
+                            image = transformed["rgb"].reshape(h, w, 3).permute(2, 0, 1)
+                        except KeyError:
+                            # Skip if camera_id isn't found
+                            pass
+                    
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)

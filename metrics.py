@@ -67,16 +67,19 @@ def evaluate(model_paths):
                 ssims = []
                 psnrs = []
                 lpipss = []
+                lpipss_c = []
 
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
                     ssims.append(ssim(renders[idx], gts[idx]))
                     psnrs.append(psnr(renders[idx], gts[idx]))
-                    lpipss.append(lpips(2*renders[idx]-1, 2*gts[idx]-1, net_type='vgg'))
+                    lpipss_c.append(lpips(2*renders[idx]-1, 2*gts[idx]-1, net_type='vgg'))
+                    lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
                     # print(image_names[idx], psnrs[-1], ssims[-1], lpipss[-1])
 
                 print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
                 print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
                 print("  LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
+                print("  LPIPS (corrected): {:>12.7f}".format(torch.tensor(lpipss_c).mean(), ".5"))
                 print("")
 
                 full_dict[scene_dir][method].update({"SSIM": torch.tensor(ssims).mean().item(),
