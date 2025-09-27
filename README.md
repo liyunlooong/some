@@ -91,6 +91,10 @@ python train.py -s <path to COLMAP or NeRF Synthetic dataset>
 
 Tested on Manjaro and Ubuntu Linux 22.04.
 
+### Notes to Users
+- Code will silently fail and create NaNs if out of memory.
+- slang can cause hangs on startup after changing code. If this happens, kill the program, delete all '.slangtorch' and '.lock' files and retry.
+
 ### Evaluation
 By default, the trained models use all available images in the dataset. To train them while withholding a test set for evaluation, use the ```--eval``` flag. This way, you can render training/test sets and produce error metrics as follows:
 ```shell
