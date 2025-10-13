@@ -9,3 +9,4 @@ slangpy
 icecream
 plyfile
 opencv-python
+tensorly
