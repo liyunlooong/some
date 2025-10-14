@@ -39,7 +39,9 @@ If you wish to skip the install, use this command to train:
 git clone --recursive https://github.com/half-potato/ever_training
 python docker_train.py -s <path to dataset> -m <path to output> ...
 ```
-The docker train script should have the same arguments as `train.py`. To visualize, do:
+The docker train script now mounts the current repository into the container and runs
+training from that checkout, so any local code changes are reflected automatically.
+It accepts the same arguments as `train.py`. To visualize, do:
 ```
 bash docker_visualize.py <path to output> <path to dataset> 6006 127.0.0.1
 ```

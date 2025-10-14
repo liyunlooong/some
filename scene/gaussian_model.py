@@ -11,7 +11,7 @@
 
 import torch
 import numpy as np
-from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from utils.general_utils import inverse_tanh, get_expon_lr_func, build_rotation
 from torch import nn
 import os
 from utils.system_utils import mkdir_p
@@ -33,9 +33,10 @@ USE_MAJOR_AXIS = False
 IGNORE_PARAM_LIST = ['glo', "glo_network"]
 
 @torch.jit.script
-def inv_opacity(y):
-    x = (-(1 - y).clip(min=1e-10).log()).clip(min=0)
-    return x
+def inv_opacity(y: torch.Tensor, max_opacity: float):
+    sign = torch.sign(y)
+    normalized = torch.clamp(y.abs() / max_opacity, min=1e-6, max=0.999)
+    return torch.atanh(normalized) * sign
 
 @torch.jit.script
 def get_major_axis(scales): 
@@ -47,29 +48,31 @@ def get_major_axis(scales):
     return max_integration_length
 
 @torch.jit.script
-def get_major_axis_density(opacity, scales):
+def get_major_axis_density(opacity, scales, max_opacity: float):
     scales = scales.detach()
 
     max_integration_length = get_major_axis(scales)
 
-    densities = inv_opacity(opacity) / max_integration_length
+    densities = inv_opacity(opacity, max_opacity) / max_integration_length
 
     return densities.reshape(-1)
     
 
 @torch.jit.script
-def get_minor_axis_density(opacity, scales):
+def get_minor_axis_density(opacity, scales, max_opacity: float):
     scales = scales.detach()
     min_integration_length = scales.min(dim=-1, keepdim=True).values * 2
 
-    densities = inv_opacity(opacity).reshape(min_integration_length.shape) / min_integration_length
+    densities = inv_opacity(opacity, max_opacity).reshape(min_integration_length.shape) / min_integration_length
     return densities
-    
-def divide_opacity(opacity, scales):
-    density = get_minor_axis_density(opacity, scales).reshape(opacity.shape) / 2
+
+def divide_opacity(opacity, scales, max_opacity: float):
+    density = get_minor_axis_density(opacity, scales, max_opacity).reshape(opacity.shape) / 2
     minor_axis = scales.min(dim=-1).values.reshape(opacity.shape)
-    minor_opacity = (1 - (-density * minor_axis).exp()).clip(min=0, max=0.99).reshape(opacity.shape)
-    return minor_opacity
+    signed_density = density * minor_axis
+    magnitude = torch.tanh(signed_density.abs())
+    minor_opacity = torch.sign(signed_density) * magnitude * max_opacity
+    return minor_opacity.reshape(opacity.shape)
 
 def f1(x):
     return torch.expm1(x).log()
@@ -117,8 +120,10 @@ class GaussianModel:
 
         self.max_opacity = max_opacity
         self.max_planned_opacity = max_opacity
-        self.opacity_activation = lambda x: self.max_opacity*torch.sigmoid(x)
-        self.inverse_opacity_activation = lambda y: inverse_sigmoid((y/self.max_opacity).clip(min=1e-3, max=0.999))
+        self.opacity_activation = lambda x: self.max_opacity * torch.tanh(x)
+        self.inverse_opacity_activation = (
+            lambda y: inverse_tanh((y / self.max_opacity).clamp(min=-0.999, max=0.999))
+        )
         self.scaling_activation = lambda x: (torch.nn.functional.softplus(x) + self.min_prim_size).clip(max=self.max_prim_size)
         self.scaling_inverse_activation = lambda y: inverse_softplus((y-self.min_prim_size).clip(min=1e-4, max=self.max_prim_size))
 
@@ -211,9 +216,9 @@ class GaussianModel:
         scaling, opacity = self.get_scale_and_opacity_for_rendering(
             per_point_2d_filter_scale, scaling_modifier)
         if USE_MAJOR_AXIS:
-            density = get_major_axis_density(opacity, scaling)
+            density = get_major_axis_density(opacity, scaling, self.max_opacity)
         else:
-            density = get_minor_axis_density(opacity, scaling)
+            density = get_minor_axis_density(opacity, scaling, self.max_opacity)
         return (scaling, density)
 
     @property
@@ -242,9 +247,9 @@ class GaussianModel:
         opacity = self.opacity_activation(self._opacity)
         scaling = self.get_scaling * scaling_modifier
         if USE_MAJOR_AXIS:
-            return get_major_axis_density(opacity, scaling)
+            return get_major_axis_density(opacity, scaling, self.max_opacity)
         else:
-            return get_minor_axis_density(opacity, scaling)
+            return get_minor_axis_density(opacity, scaling, self.max_opacity)
 
     @property
     def get_minor_axis_opacity(self):
@@ -253,7 +258,7 @@ class GaussianModel:
             minor_axis = self.get_scaling.min(dim=-1).values.reshape(density.shape)
             return (1 - (-density * minor_axis).exp()).clip(min=1e-4, max=0.99)
         else:
-            return self.get_opacity
+            return self.get_opacity.abs()
 
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
@@ -282,7 +287,9 @@ class GaussianModel:
 
 
         # add points using sphere init
-        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacities = self.inverse_opacity_activation(
+            0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+        )
         if num_additional_pts > 0:
             center = torch.mean(fused_point_cloud, dim=0)
             sph_means, sph_scales, sph_quats, sph_densities, sph_feats = \
@@ -292,14 +299,19 @@ class GaussianModel:
             sph_scales = sph_scales.mean(dim=-1, keepdim=True).expand(-1, 3)
             scales = torch.cat([scales, sph_scales], dim=0).clip(min=self.min_prim_size, max=self.max_prim_size)
             rots = torch.cat([rots, sph_quats], dim=0)
-            sph_features = self.inverse_feature_activation(RGB2SH(0.5*torch.ones((sph_means.shape[0], 3, 1), device='cuda')))
+            neutral_color = torch.zeros((sph_means.shape[0], 3, 1), device='cuda')
+            sph_features = self.inverse_feature_activation(RGB2SH(neutral_color))
             features = torch.cat([features, torch.cat([
                 sph_features,
                 torch.zeros((sph_means.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1), device='cuda')
             ], dim=2)], dim=0)
             dist = torch.linalg.norm(sph_means, dim=-1, keepdim=True)
             scaling = 1-1/(dist+1)
-            opacities = torch.cat([opacities, inverse_sigmoid(0.1 * scaling)], dim=0)
+            new_opacity_targets = 0.1 * scaling
+            opacities = torch.cat(
+                [opacities, self.inverse_opacity_activation(new_opacity_targets)],
+                dim=0,
+            )
 
         raw_scales = self.scaling_inverse_activation(scales)
 
@@ -577,11 +589,15 @@ class GaussianModel:
 
         probing_axis = get_major_axis(scaling).reshape(density.shape) / np.sqrt(2)
         probing_axis = (scaling**2).sum(dim=-1).sqrt().reshape(density.shape)
-        major_opacity = (1 - (-density * probing_axis).exp()).clip(min=0).reshape(-1)
+        major_opacity = (
+            torch.tanh(density.abs() * probing_axis) * self.max_opacity
+        ).reshape(-1)
 
-        selected_pts_mask = (padded_grad >= grad_threshold) | (major_opacity > 0.99)
+        selected_pts_mask = (padded_grad >= grad_threshold) | (
+            major_opacity > self.max_opacity * 0.99
+        )
         size_mask = torch.min(self.get_scaling, dim=1).values*SCALING2RADIUS > self.percent_dense*scene_extent / multi
-        opacity_mask = (self.get_opacity > min_opacity).reshape(-1)
+        opacity_mask = (self.get_opacity.abs() > min_opacity).reshape(-1)
         selected_pts_mask = selected_pts_mask & size_mask & opacity_mask
 
         print(
@@ -606,7 +622,8 @@ class GaussianModel:
 
         replace_opacity = self.get_opacity
         divided_opacities = divide_opacity(
-            replace_opacity[selected_pts_mask], div_scaling).reshape(-1, 1)
+            replace_opacity[selected_pts_mask], div_scaling, self.max_opacity
+        ).reshape(-1, 1)
         new_opacity = self.inverse_opacity_activation(divided_opacities.repeat(N,1))
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
@@ -617,16 +634,20 @@ class GaussianModel:
     def densify_and_clone(self, scaling, density, grads, grad_threshold, radius, scene_extent, min_clone_opacity=0.0):
         # Extract points that satisfy the gradient condition
         major_axis = get_major_axis(scaling).reshape(density.shape) / np.sqrt(2)
-        major_opacity = (1 - (-density * major_axis).exp()).clip(min=0).reshape(-1)
+        major_opacity = (
+            torch.tanh(density.abs() * major_axis) * self.max_opacity
+        ).reshape(-1)
 
-        selected_pts_mask = (grads >= grad_threshold).reshape(-1)# | (major_opacity > 0.99)
+        selected_pts_mask = (grads >= grad_threshold).reshape(-1)# | (major_opacity > self.max_opacity * 0.99)
 
         size_mask = torch.min(scaling, dim=1).values <= self.percent_dense*scene_extent/SCALING2RADIUS
-        opacity_mask = ((1 - (1-self.get_opacity).sqrt()) > min_clone_opacity).reshape(-1)
+        opacity_mask = (self.get_opacity.abs() > min_clone_opacity).reshape(-1)
         selected_pts_mask = selected_pts_mask & size_mask & opacity_mask
 
         replace_opacity = self.get_opacity
-        divided_opacities = divide_opacity(replace_opacity[selected_pts_mask], scaling[selected_pts_mask]).reshape(-1, 1)
+        divided_opacities = divide_opacity(
+            replace_opacity[selected_pts_mask], scaling[selected_pts_mask], self.max_opacity
+        ).reshape(-1, 1)
         replace_opacity[selected_pts_mask] = divided_opacities
         raw_opacity = self.inverse_opacity_activation(replace_opacity)
 
@@ -656,7 +677,10 @@ class GaussianModel:
         return new_scaling, new_density
 
     def decrease_opacity(self, amount):
-        opacities_new = self.inverse_opacity_activation((self.get_opacity - amount))
+        target_opacity = (self.get_opacity - amount).clamp(
+            min=-self.max_opacity, max=self.max_opacity
+        )
+        opacities_new = self.inverse_opacity_activation(target_opacity)
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
@@ -683,7 +707,9 @@ class GaussianModel:
         prune_mask[:n] = (denom.reshape(-1) > 0) & prune_mask[:n]
         prune_mask[n:] = False
 
-        print(f"Pruned {prune_mask.sum()} primitives. Mean Prune Opacity: {self.get_opacity[prune_mask].mean()}")
+        print(
+            f"Pruned {prune_mask.sum()} primitives. Mean Prune Opacity: {self.get_opacity[prune_mask].abs().mean()}"
+        )
         self.prune_points(prune_mask)
 
         if prune_mask.sum() > 0:

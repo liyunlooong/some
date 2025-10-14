@@ -16,17 +16,32 @@ import numpy as np
 import random
 import cv2
 
-def inverse_sigmoid(x):
-    return torch.log(x/(1-x))
+
+def inverse_tanh(x: torch.Tensor) -> torch.Tensor:
+    """Compute the inverse hyperbolic tangent with clamping for numerical stability."""
+
+    eps = torch.finfo(x.dtype).eps if torch.is_floating_point(x) else 1e-6
+    clamped = x.clamp(min=-1 + eps, max=1 - eps)
+    return torch.atanh(clamped)
 
 def PILtoTorch(pil_image, resolution):
     # resized_image_PIL = cv2.resize(pil_image, resolution)
     resized_image_PIL = pil_image.resize(resolution)
-    resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
-    if len(resized_image.shape) == 3:
-        return resized_image.permute(2, 0, 1)
+    np_image = np.array(resized_image_PIL)
+    tensor_image = torch.from_numpy(np_image).float()
+
+    if tensor_image.ndim == 3:
+        if tensor_image.shape[2] == 4:
+            rgb = tensor_image[..., :3] / 127.5 - 1.0
+            alpha = tensor_image[..., 3:4] / 255.0
+            resized_image = torch.cat([rgb, alpha], dim=2)
+        else:
+            resized_image = tensor_image / 127.5 - 1.0
     else:
-        return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+        resized_image = tensor_image.unsqueeze(dim=-1)
+        resized_image = resized_image / 127.5 - 1.0
+
+    return resized_image.permute(2, 0, 1)
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000

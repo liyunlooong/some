@@ -162,7 +162,9 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     custom_cam.image_width = image_width // PREVIEW_RES_FACTOR
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
                     net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
-                    net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+                    net_image = (
+                        (torch.clamp(net_image, min=-1.0, max=1.0) + 1.0) * 0.5 * 255
+                    ).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
                 network_gui.send(net_image_bytes, dataset.source_path)

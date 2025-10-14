@@ -173,7 +173,8 @@ def fetchPly(path):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T.astype(np.float32)
+    colors = colors / 127.5 - 1.0
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
@@ -182,12 +183,20 @@ def storePly(path, xyz, rgb):
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-    
+
     normals = np.zeros_like(xyz)
+    rgb_uint8 = np.clip(((rgb + 1.0) * 0.5) * 255.0, 0, 255).astype(np.uint8)
 
     elements = np.empty(xyz.shape[0], dtype=dtype)
-    attributes = np.concatenate((xyz, normals, rgb), axis=1)
-    elements[:] = list(map(tuple, attributes))
+    elements['x'] = xyz[:, 0]
+    elements['y'] = xyz[:, 1]
+    elements['z'] = xyz[:, 2]
+    elements['nx'] = normals[:, 0]
+    elements['ny'] = normals[:, 1]
+    elements['nz'] = normals[:, 2]
+    elements['red'] = rgb_uint8[:, 0]
+    elements['green'] = rgb_uint8[:, 1]
+    elements['blue'] = rgb_uint8[:, 2]
 
     # Create the PlyData object and write to file
     vertex_element = PlyElement.describe(elements, 'vertex')
@@ -231,6 +240,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
             xyz, rgb, _ = read_points3D_binary(bin_path)
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
+        rgb = rgb.astype(np.float32)
+        rgb = rgb / 127.5 - 1.0
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)
@@ -309,10 +320,10 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
         
         # We create random points inside the bounds of the synthetic Blender scenes
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-        shs = np.random.random((num_pts, 3)) / 255.0
+        shs = np.random.random((num_pts, 3)) * 2.0 - 1.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        storePly(ply_path, xyz, SH2RGB(shs))
     try:
         pcd = fetchPly(ply_path)
     except:
