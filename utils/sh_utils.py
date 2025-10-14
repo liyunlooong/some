@@ -55,10 +55,11 @@ C4 = [
 
 
 def RGB2SH(rgb):
-    return (rgb - 0.5) / C0
+    return rgb / C0
+
 
 def SH2RGB(sh):
-    return sh * C0 + 0.5
+    return sh * C0
 
 @torch.jit.script
 def eval_sh(deg: int, sh, dirs):
