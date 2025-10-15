@@ -22,7 +22,7 @@ from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import get_ray_directions, get_rays
 import torchvision
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, set_color_bounds
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args, OptimizationParams
 from gaussian_renderer import GaussianModel
@@ -79,6 +79,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, checkpoint, opt):
     with torch.no_grad():
+        set_color_bounds(dataset.color_min, 1.0)
         gaussians = GaussianModel(dataset.sh_degree, dataset.use_neural_network, dataset.max_opacity)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         if checkpoint:

@@ -81,6 +81,7 @@ class ModelParams(ParamGroup):
         self.num_spline_frames = 480
         self.glo_latent_dim = 64
         self.max_opacity = 0.99
+        self.color_min = -1.0
         self.tmin = 0.2
         self.enable_mip_splatting = False  # Add the missing attribute
         self.low_pass_2d_kernel_size = 3 # Add the missing attribute

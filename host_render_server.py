@@ -19,7 +19,7 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, set_color_bounds, clamp_colors, convert_color_to_uint8
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -70,6 +70,7 @@ def set_glo_vector(viewpoint_cam, gaussians, camera_inds):
     )
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+    set_color_bounds(dataset.color_min, 1.0)
     first_iter = 0
     gaussians = GaussianModel(dataset.sh_degree, dataset.use_neural_network, dataset.max_opacity)
     if checkpoint:
@@ -150,7 +151,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                     # net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
                     print(1/(time.time()-st))
-                    net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+                    net_image = convert_color_to_uint8(clamp_colors(net_image)).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     # ic(net_image.shape, net_image.dtype)
                     net_image_bytes = memoryview(net_image)
