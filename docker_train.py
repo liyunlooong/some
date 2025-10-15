@@ -36,26 +36,31 @@ def main():
     # that we want to forward to train.py:
     known_args, unknown_args = parser.parse_known_args()
 
+    repo_path = os.path.abspath(os.getcwd())
+    container_repo_path = "/workspace/local_ever_training"
+
     # Now build the docker command:
     docker_cmd = [
         "docker", "run", "--rm", "--gpus", "all",
         "-v", "/tmp/NVIDIA:/tmp/NVIDIA",
         # "--user", "$(id -u):$(id -g)",
         "-e", "NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility",
+        # Ensure Python can still locate the prebuilt CUDA extensions that ship
+        # with the base container even though we mount our working tree at a
+        # different path.
+        "-e", "PYTHONPATH=/workspace/local_ever_training:/workspace/ever_training",
         # Mount the scene/dataset directory and model_path
         "-v", f"{known_args.scene}:/data/dataset",
         "-v", f"{known_args.model_path}:/data/output",
         # Also mount the current directory for your code
-        #"-v", f"{os.getcwd()}:/ever_training2",
+        "-v", f"{repo_path}:{container_repo_path}",
         # Port mapping
         "-p", f"{known_args.ip}:{known_args.port}:{known_args.port}",
         "halfpotato/ever:latest",
         "bash", "-c",
         (
             "source activate ever && "
-            # "cd /ever_training2 && "
-            # "rm -r ever && "
-            # "cp -r /ever_training/ever . && "
+            f"cd {container_repo_path} && "
             # "$@" references extra arguments from the final "_" placeholder
             "python train.py -s /data/dataset -m /data/output \"$@\""
         ),

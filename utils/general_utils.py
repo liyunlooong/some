@@ -16,17 +16,81 @@ import numpy as np
 import random
 import cv2
 
-def inverse_sigmoid(x):
-    return torch.log(x/(1-x))
+
+COLOR_MIN = -1.0
+COLOR_MAX = 1.0
+
+
+def set_color_bounds(min_value: float, max_value: float = 1.0) -> None:
+    """Configure the global color bounds used throughout the pipeline."""
+
+    global COLOR_MIN, COLOR_MAX
+
+    max_value = min(1.0, float(max_value))
+    if max_value <= -1.0:
+        raise ValueError("Maximum color bound must be greater than -1.0.")
+
+    min_value = float(min_value)
+    # Clamp to the supported [-1, 0] interval while allowing callers to shrink the range.
+    min_value = max(-1.0, min(0.0, min_value))
+    if min_value >= max_value:
+        raise ValueError("Minimum color bound must be smaller than the maximum bound.")
+
+    COLOR_MIN = min_value
+    COLOR_MAX = max_value
+
+
+def get_color_bounds():
+    return COLOR_MIN, COLOR_MAX
+
+
+def clamp_colors(value: torch.Tensor) -> torch.Tensor:
+    min_v, max_v = get_color_bounds()
+    return value.clamp(min=min_v, max=max_v)
+
+
+def convert_uint8_to_color(value):
+    min_v, max_v = get_color_bounds()
+    scale = (max_v - min_v) / 255.0
+    if torch.is_tensor(value):
+        return value.to(dtype=torch.float32) * scale + min_v
+    return value.astype(np.float32) * scale + min_v
+
+
+def convert_color_to_uint8(value):
+    min_v, max_v = get_color_bounds()
+    if max_v <= min_v:
+        raise ValueError("Color bounds must span a positive range.")
+    scale = 255.0 / (max_v - min_v)
+    if torch.is_tensor(value):
+        return ((value.to(dtype=torch.float32) - min_v) * scale).clamp(0.0, 255.0)
+    return np.clip((value.astype(np.float32) - min_v) * scale, 0.0, 255.0)
+
+
+def inverse_tanh(x: torch.Tensor) -> torch.Tensor:
+    """Compute the inverse hyperbolic tangent with clamping for numerical stability."""
+
+    eps = torch.finfo(x.dtype).eps if torch.is_floating_point(x) else 1e-6
+    clamped = x.clamp(min=-1 + eps, max=1 - eps)
+    return torch.atanh(clamped)
 
 def PILtoTorch(pil_image, resolution):
     # resized_image_PIL = cv2.resize(pil_image, resolution)
     resized_image_PIL = pil_image.resize(resolution)
-    resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
-    if len(resized_image.shape) == 3:
-        return resized_image.permute(2, 0, 1)
+    np_image = np.array(resized_image_PIL)
+    tensor_image = torch.from_numpy(np_image).float()
+
+    if tensor_image.ndim == 3:
+        if tensor_image.shape[2] == 4:
+            rgb = convert_uint8_to_color(tensor_image[..., :3])
+            alpha = tensor_image[..., 3:4] / 255.0
+            resized_image = torch.cat([rgb, alpha], dim=2)
+        else:
+            resized_image = convert_uint8_to_color(tensor_image)
     else:
-        return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+        resized_image = convert_uint8_to_color(tensor_image.unsqueeze(dim=-1))
+
+    return resized_image.permute(2, 0, 1)
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000

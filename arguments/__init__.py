@@ -81,6 +81,7 @@ class ModelParams(ParamGroup):
         self.num_spline_frames = 480
         self.glo_latent_dim = 64
         self.max_opacity = 0.99
+        self.color_min = -1.0
         self.tmin = 0.2
         self.enable_mip_splatting = False  # Add the missing attribute
         self.low_pass_2d_kernel_size = 3 # Add the missing attribute
@@ -91,6 +92,8 @@ class ModelParams(ParamGroup):
     def extract(self, args):
         g = super().extract(args)
         g.source_path = os.path.abspath(g.source_path)
+        if not hasattr(g, "color_min"):
+            setattr(g, "color_min", getattr(args, "color_min", -1.0))
         return g
 
 
@@ -101,6 +104,41 @@ class PipelineParams(ParamGroup):
         self.enable_GLO = False
         self.debug = False
         super().__init__(parser, "Pipeline Parameters")
+
+def _consume_color_min_override(parser: ArgumentParser, extras):
+    override = None
+    idx = 0
+    while idx < len(extras):
+        token = extras[idx]
+        if token.startswith("--color_min"):
+            if token == "--color_min":
+                if idx + 1 >= len(extras):
+                    parser.error("--color_min expects a value")
+                value_token = extras[idx + 1]
+                idx += 2
+            elif token.startswith("--color_min="):
+                value_token = token.split("=", 1)[1]
+                idx += 1
+            else:
+                parser.error("unrecognized arguments: " + " ".join(extras[idx:]))
+            try:
+                override = float(value_token)
+            except ValueError:
+                parser.error("--color_min expects a floating point value")
+        else:
+            parser.error("unrecognized arguments: " + " ".join(extras[idx:]))
+    return override
+
+
+def parse_args_with_color_min(parser: ArgumentParser, argv):
+    args, extras = parser.parse_known_args(argv)
+    override = _consume_color_min_override(parser, extras)
+    if override is not None:
+        setattr(args, "color_min", override)
+    elif not hasattr(args, "color_min"):
+        setattr(args, "color_min", -1.0)
+    return args
+
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
@@ -162,7 +200,7 @@ class OptimizationParams(ParamGroup):
 def get_combined_args(parser: ArgumentParser):
     cmdlne_string = sys.argv[1:]
     cfgfile_string = "Namespace()"
-    args_cmdline = parser.parse_args(cmdlne_string)
+    args_cmdline = parse_args_with_color_min(parser, cmdlne_string)
 
     try:
         cfgfilepath = os.path.join(args_cmdline.model_path, "cfg_args")

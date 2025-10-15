@@ -18,12 +18,12 @@ from gaussian_renderer import render, network_gui
 from gaussian_renderer.ever import splinerender
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, set_color_bounds, clamp_colors, convert_color_to_uint8
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
+from arguments import ModelParams, PipelineParams, OptimizationParams, parse_args_with_color_min
 from icecream import ic
 import random
 import math
@@ -71,6 +71,7 @@ def set_glo_vector(viewpoint_cam, gaussians, camera_inds):
     )
 
 def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelineParams, testing_iterations : List[int], saving_iterations : List[int], checkpoint_iterations : List[int], checkpoint, debug_from):
+    set_color_bounds(dataset.color_min, 1.0)
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -162,7 +163,7 @@ def training(dataset : ModelParams, opt : OptimizationParams, pipe : PipelinePar
                     custom_cam.image_width = image_width // PREVIEW_RES_FACTOR
                     custom_cam.image_height = image_height // PREVIEW_RES_FACTOR
                     net_image = renderFunc(custom_cam, gaussians, pipe, background, scaling_modifer, random=False, tmin=0)["render"]
-                    net_image = (torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+                    net_image = convert_color_to_uint8(clamp_colors(net_image)).byte().permute(1, 2, 0).contiguous().cpu().numpy()
                     net_image = cv2.resize(net_image, (image_width, image_height))
                     net_image_bytes = memoryview(net_image)
                 network_gui.send(net_image_bytes, dataset.source_path)
@@ -420,7 +421,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
                     set_glo_vector(viewpoint, scene.gaussians, camera_inds)
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, random=False)["render"], 0.0, 1.0)
+                    image = clamp_colors(renderFunc(viewpoint, scene.gaussians, *renderArgs, random=False)["render"])
                     
                     # Apply bilateral grid transformation if enabled
                     if bilateral_grid is not None and config['name'] == 'train':  # Only apply to train views that have matching camera IDs
@@ -446,11 +447,13 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             # Skip if camera_id isn't found
                             pass
                     
-                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    gt_image = clamp_colors(viewpoint.original_image.to("cuda"))
                     if tb_writer and (idx < 5):
-                        tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
+                        render_for_log = convert_color_to_uint8(image) / 255.0
+                        gt_for_log = convert_color_to_uint8(gt_image) / 255.0
+                        tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), render_for_log[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
-                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
+                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_for_log[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
@@ -480,7 +483,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    args = parser.parse_args(sys.argv[1:])
+    args = parse_args_with_color_min(parser, sys.argv[1:])
     args.save_iterations.append(args.iterations)
     # args.checkpoint_iterations.append(args.iterations)
     
@@ -489,10 +492,16 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
+    dataset = lp.extract(args)
+    if not hasattr(dataset, "color_min"):
+        setattr(dataset, "color_min", getattr(args, "color_min", -1.0))
+    opt_params = op.extract(args)
+    pipe_params = pp.extract(args)
+
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     # training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.save_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(dataset, opt_params, pipe_params, args.save_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
