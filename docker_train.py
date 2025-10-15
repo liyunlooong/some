@@ -45,6 +45,10 @@ def main():
         "-v", "/tmp/NVIDIA:/tmp/NVIDIA",
         # "--user", "$(id -u):$(id -g)",
         "-e", "NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility",
+        # Ensure Python can still locate the prebuilt CUDA extensions that ship
+        # with the base container even though we mount our working tree at a
+        # different path.
+        "-e", "PYTHONPATH=/workspace/local_ever_training:/workspace/ever_training",
         # Mount the scene/dataset directory and model_path
         "-v", f"{known_args.scene}:/data/dataset",
         "-v", f"{known_args.model_path}:/data/output",

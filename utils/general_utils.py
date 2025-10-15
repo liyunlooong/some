@@ -17,6 +17,56 @@ import random
 import cv2
 
 
+COLOR_MIN = -1.0
+COLOR_MAX = 1.0
+
+
+def set_color_bounds(min_value: float, max_value: float = 1.0) -> None:
+    """Configure the global color bounds used throughout the pipeline."""
+
+    global COLOR_MIN, COLOR_MAX
+
+    max_value = min(1.0, float(max_value))
+    if max_value <= -1.0:
+        raise ValueError("Maximum color bound must be greater than -1.0.")
+
+    min_value = float(min_value)
+    # Clamp to the supported [-1, 0] interval while allowing callers to shrink the range.
+    min_value = max(-1.0, min(0.0, min_value))
+    if min_value >= max_value:
+        raise ValueError("Minimum color bound must be smaller than the maximum bound.")
+
+    COLOR_MIN = min_value
+    COLOR_MAX = max_value
+
+
+def get_color_bounds():
+    return COLOR_MIN, COLOR_MAX
+
+
+def clamp_colors(value: torch.Tensor) -> torch.Tensor:
+    min_v, max_v = get_color_bounds()
+    return value.clamp(min=min_v, max=max_v)
+
+
+def convert_uint8_to_color(value):
+    min_v, max_v = get_color_bounds()
+    scale = (max_v - min_v) / 255.0
+    if torch.is_tensor(value):
+        return value.to(dtype=torch.float32) * scale + min_v
+    return value.astype(np.float32) * scale + min_v
+
+
+def convert_color_to_uint8(value):
+    min_v, max_v = get_color_bounds()
+    if max_v <= min_v:
+        raise ValueError("Color bounds must span a positive range.")
+    scale = 255.0 / (max_v - min_v)
+    if torch.is_tensor(value):
+        return ((value.to(dtype=torch.float32) - min_v) * scale).clamp(0.0, 255.0)
+    return np.clip((value.astype(np.float32) - min_v) * scale, 0.0, 255.0)
+
+
 def inverse_tanh(x: torch.Tensor) -> torch.Tensor:
     """Compute the inverse hyperbolic tangent with clamping for numerical stability."""
 
@@ -32,14 +82,13 @@ def PILtoTorch(pil_image, resolution):
 
     if tensor_image.ndim == 3:
         if tensor_image.shape[2] == 4:
-            rgb = tensor_image[..., :3] / 127.5 - 1.0
+            rgb = convert_uint8_to_color(tensor_image[..., :3])
             alpha = tensor_image[..., 3:4] / 255.0
             resized_image = torch.cat([rgb, alpha], dim=2)
         else:
-            resized_image = tensor_image / 127.5 - 1.0
+            resized_image = convert_uint8_to_color(tensor_image)
     else:
-        resized_image = tensor_image.unsqueeze(dim=-1)
-        resized_image = resized_image / 127.5 - 1.0
+        resized_image = convert_uint8_to_color(tensor_image.unsqueeze(dim=-1))
 
     return resized_image.permute(2, 0, 1)
 

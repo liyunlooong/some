@@ -22,6 +22,7 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+from utils.general_utils import convert_uint8_to_color, convert_color_to_uint8
 import enum
 import json
 
@@ -174,7 +175,7 @@ def fetchPly(path):
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T.astype(np.float32)
-    colors = colors / 127.5 - 1.0
+    colors = convert_uint8_to_color(colors)
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
@@ -185,7 +186,7 @@ def storePly(path, xyz, rgb):
             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
 
     normals = np.zeros_like(xyz)
-    rgb_uint8 = np.clip(((rgb + 1.0) * 0.5) * 255.0, 0, 255).astype(np.uint8)
+    rgb_uint8 = convert_color_to_uint8(rgb).astype(np.uint8)
 
     elements = np.empty(xyz.shape[0], dtype=dtype)
     elements['x'] = xyz[:, 0]
@@ -240,8 +241,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
             xyz, rgb, _ = read_points3D_binary(bin_path)
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
-        rgb = rgb.astype(np.float32)
-        rgb = rgb / 127.5 - 1.0
+        rgb = convert_uint8_to_color(rgb.astype(np.float32))
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)

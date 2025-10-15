@@ -10,10 +10,13 @@
 #
 
 import torch
+from utils.general_utils import get_color_bounds
 
 def mse(img1, img2):
     return (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
 
 def psnr(img1, img2):
     mse = (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
-    return 20 * torch.log10(1.0 / torch.sqrt(mse))
+    min_v, max_v = get_color_bounds()
+    peak = max_v - min_v
+    return 20 * torch.log10(peak / torch.sqrt(mse + 1e-8))

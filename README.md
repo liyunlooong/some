@@ -41,6 +41,8 @@ python docker_train.py -s <path to dataset> -m <path to output> ...
 ```
 The docker train script now mounts the current repository into the container and runs
 training from that checkout, so any local code changes are reflected automatically.
+It also keeps the container's prebuilt CUDA extensions on the Python path, so you
+do not need to rebuild them when iterating on Python code.
 It accepts the same arguments as `train.py`. To visualize, do:
 ```
 bash docker_visualize.py <path to output> <path to dataset> 6006 127.0.0.1
@@ -90,6 +92,11 @@ We can now train using the following command:
 ```
 python train.py -s <path to COLMAP or NeRF Synthetic dataset>
 ```
+
+The color pipeline clamps outputs between a configurable minimum and `1`. Use
+`--color_min` to choose the lower truncation point anywhere in `[-1, 0]`. For
+example, `--color_min -0.5` restricts colors to `[-0.5, 1]` while preserving the
+rest of the signed pipeline.
 
 Tested on Manjaro and Ubuntu Linux 22.04.
 
